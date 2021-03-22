@@ -77,12 +77,14 @@ class GcpIcalendar:
 
         target = None
         event_id = self.get_id(data, event_type)
+        event_label = self.get_event_label(data, event_type)
+
         try:
             event_date = self.get_event_date(data, event_type)
         except ValueError:
             # event 날짜가 아직 업데이트 되지 않은 경우
             return
-        event_label = self.get_event_label(data, event_type)
+
         try:
             vevent_list = self.cal.vevent_list
             target = list(filter(lambda x: x.id.value == event_id, vevent_list))[0]
@@ -93,15 +95,17 @@ class GcpIcalendar:
         finally:
             # DTSTART : 일정 시작시간
             if len(list(filter(lambda x: x.name == 'DTSTART', target.getChildren()))) > 0:  # 업데이트
-                target.dtstart.value = event_date + timedelta(hours=9)
+                target.dtstart.value = event_date.date()
             else:  # 신규등록
-                target.add('dtstart').value = event_date + timedelta(hours=9)
+                target.add('dtstart').value = event_date.date()
 
             # DTEND : 일정 종료시간
+            if event_type == '청약일정':
+                event_date = event_date + timedelta(days=2)
             if len(list(filter(lambda x: x.name == 'DTEND', target.getChildren()))) > 0:  # 업데이트
-                target.dtend.value = event_date + timedelta(hours=10)
+                target.dtend.value = event_date.date()
             else:  # 신규등록
-                target.add('dtend').value = event_date + timedelta(hours=10)
+                target.add('dtend').value = event_date.date()
 
             # DTSTAMP : 업데이트 시간
             if len(list(filter(lambda x: x.name == 'DTSTAMP', target.getChildren()))) > 0:  # 업데이트
