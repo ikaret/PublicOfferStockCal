@@ -32,31 +32,65 @@ class GcpIcalendar:
         storage_client = storage.Client()
         bucket = storage_client.bucket(bucket_name)
         blob = bucket.blob(source_blob_name)
+        blob.cache_control = 'no-store'
         blob.upload_from_string(self.cal.serialize())
+
         print(f'Text file uploaded to {source_blob_name}.')
 
-    def set_vevent(self, data):
+    @staticmethod
+    def get_id(data, event_type):
+        if event_type == '상장일정':
+            return f'{data.id}'
+        return f'{event_type}_{data.id}'
+
+    @staticmethod
+    def get_event_date(data, event_type):
+        if event_type == '청약일정':
+            return datetime.strptime(data.subscription_date, '%Y%m%d')
+        elif event_type == '환불일정':
+            return datetime.strptime(data.assignment_date, '%Y%m%d')
+        elif event_type == '상장일정':
+            return datetime.strptime(data.listing_date, '%Y%m%d')
+
+    @staticmethod
+    def get_event_label(data, event_type):
+        if event_type == '청약일정':
+            return '[청약]' + data.title
+        elif event_type == '환불일정':
+            return '[환불]' + data.title
+        elif event_type == '상장일정':
+            return '[상장]' + data.title
+
+    def set_vevent(self, data, event_type):
+        """data 값을 내부 ical Object 에 vevent 정보로 입력 or 업데이트
+
+        :type data: IpoObject
+        :param data: 입력값으로 사용될 IPO 정보가 담긴 IpoObject class 변수
+
+        :type event_type: str
+        :param event_type:
+            '청약일정' / '환불일정' / '상장일정'
+        """
 
         if '스팩' in data.title:
             return
 
         target = None
+        event_id = self.get_id(data, event_type)
+        try:
+            event_date = self.get_event_date(data, event_type)
+        except ValueError:
+            # event 날짜가 아직 업데이트 되지 않은 경우
+            return
+        event_label = self.get_event_label(data, event_type)
         try:
             vevent_list = self.cal.vevent_list
-            target = list(filter(lambda x: x.id.value == data.id, vevent_list))[0]
+            target = list(filter(lambda x: x.id.value == event_id, vevent_list))[0]
         except (AttributeError, KeyError, IndexError):
             # AttributeError, KeyError : self.cal 이 비어있는 상태
             # IndexError : self.cal 에 등록안된 데이터 입력인 경우
             target = self.cal.add('vevent')
         finally:
-            # data 의 값 입력
-            if data.get_status() == 'Before subscription':
-                event_date = datetime.strptime(data.subscription_date, '%Y%m%d')
-                event_label = '[청약]' + data.title
-            else:
-                event_date = datetime.strptime(data.listing_date, '%Y%m%d')
-                event_label = '[상장]' + data.title
-
             # DTSTART : 일정 시작시간
             if len(list(filter(lambda x: x.name == 'DTSTART', target.getChildren()))) > 0:  # 업데이트
                 target.dtstart.value = event_date + timedelta(hours=9)
@@ -115,23 +149,41 @@ class GcpIcalendar:
             if len(list(filter(lambda x: x.name == 'ID', target.getChildren()))) > 0:  # 업데이트
                 pass
             else:  # 신규등록
-                target.add('id').value = data.id
+                target.add('id').value = event_id
 
             # DESCRIPTION : 메모
+            subscription_date = ''
+            try:
+                subscription_date = datetime.strptime(data.subscription_date, '%Y%m%d').strftime('%Y.%m.%d')
+            except ValueError:
+                pass
+            assignment_date = ''
+            try:
+                assignment_date = datetime.strptime(data.assignment_date, '%Y%m%d').strftime('%Y.%m.%d')
+            except ValueError:
+                pass
+            listing_date = ''
+            try:
+                listing_date = datetime.strptime(data.listing_date, '%Y%m%d').strftime('%Y.%m.%d')
+            except ValueError:
+                pass
+
             note = (
-                f'청약 경쟁률 : {data.competition_ratio}<br>'
-                f'청약 주간사 : {", ".join(data.securities_companies)}<br>'
-                f'확정공모가 : {data.public_offering_price}<br>'
-                f'희망공모가 : {data.desired_offering_price_min} ~ {data.desired_offering_price_max}<br>'
-                f'의무보유확약 : {data.obligatory_retention_commitment}<br>'
-                f'기관경쟁률 : {data.institutional_competition_ratio}<br>'
-                f'현재가 : {data.current_price}<br>'
-                f'공모 청약 개시일 : {data.subscription_date}<br>'
-                f'배정 공고일 (환불일) : {data.assignment_date}<br>'
-                f'상장일 : {data.listing_date}<br>'
-                f'<a href="{data.additional_link_38}">공모주 상세 정보(38커뮤)</a><br>'
-                f'<a href="{data.community_link_38}">커뮤니티(38커뮤)</a>'
+                f'청약 경쟁률 : {data.competition_ratio}\n'
+                f'청약 주간사 : {", ".join(data.securities_companies)}\n'
+                f'확정공모가 : {data.public_offering_price}원\n'
+                f'희망공모가 : {data.desired_offering_price_min}원 ~ {data.desired_offering_price_max}원\n'
+                f'의무보유확약 : {data.obligatory_retention_commitment}\n'
+                f'기관경쟁률 : {data.institutional_competition_ratio}\n'
+                f'현재가 : {data.current_price}\n'
+                f'공모 청약 개시일 : {subscription_date}\n'
+                f'배정 공고일 (환불일) : {assignment_date}\n'
+                f'상장일 : {listing_date}\n'
+                f'상세 정보(38커뮤) : {data.additional_link_38}\n'
+                f'커뮤니티(38커뮤) : {data.community_link_38}\n'
+                f'업데이트 시간 : {datetime.now().strftime("%y-%m-%d %H:%M:%S")}'
             )
+
             if len(list(filter(lambda x: x.name == 'DESCRIPTION', target.getChildren()))) > 0:  # 업데이트
                 target.description.value = note
             else:  # 신규등록
@@ -178,18 +230,6 @@ class IpoObject:
 
         # data['T_RESULT']  # 0, 1, 6 등의 값이 들어오나 용도 모르겠음
 
-    def get_status(self):
-        now = datetime.now()
-        if now < (datetime.strptime(self.subscription_date, '%Y%m%d') + timedelta(days=2)):
-            # 청약 시작일 + 2일 이전인 경우
-            return 'Before subscription'
-        elif now < datetime.strptime(self.listing_date, '%Y%m%d') + timedelta(days=1):
-            # 상장일 + 1일 인 경우
-            return 'Before listing'
-        else:
-            # 상장 이후
-            return 'After listing'
-
 
 # google cloud functions 진입 함수
 def public_offer_stock_cal_main(request):
@@ -199,14 +239,16 @@ def public_offer_stock_cal_main(request):
         if not res.status_code == requests.codes.ok:
             res.raise_for_status()
         for ipo_data in res.json()['resultList']:
-            ical.set_vevent(IpoObject(ipo_data))
+            ical.set_vevent(IpoObject(ipo_data), '청약일정')
+            ical.set_vevent(IpoObject(ipo_data), '환불일정')
+            ical.set_vevent(IpoObject(ipo_data), '상장일정')
         ical.upload_google_blob()
         return 'Success!'
     except requests.HTTPError as e:
         print(e)
+        return f'HTTP Request Error! - {e}'
+    except Exception as e:
         return f'Error! - {e}'
-    except:
-        return 'Error!'
 
 
 # Local Test Source
